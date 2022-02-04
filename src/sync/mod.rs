@@ -5,8 +5,51 @@ use std::io::{self, BufWriter, Seek, Write};
 use std::iter::Iterator;
 use std::path::PathBuf;
 use std::iter::DoubleEndedIterator;
+use std::str;
 
-pub struct Error;
+
+#[derive(Debug)]
+pub struct Error{
+    error: ErrorKind,
+}
+
+#[derive(Debug)]
+pub enum ErrorKind{
+    Io(io::Error),
+    Serialize(),
+    Deserialize(),
+    Utf8(str::Utf8Error)
+}
+
+impl Error {
+    pub fn serialize()->Self{
+        Error{
+            error:ErrorKind::Serialize()
+        }
+    }
+    pub fn deserialize()->Self{
+        Error{
+            error:ErrorKind::Deserialize()
+        }
+    }
+}
+
+
+impl From<std::io::Error> for Error {
+    fn from(e: io::Error) -> Self {
+        Error{
+            error: ErrorKind::Io(e),
+        }
+    }
+}
+
+impl From<str::Utf8Error> for Error{
+    fn from(e: str::Utf8Error)->Self{
+        Error{
+            error: ErrorKind::Utf8(e)
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct VecCache<T: Sized, S, D>
@@ -16,7 +59,6 @@ pub struct VecCache<T: Sized, S, D>
     file: File,
     data: Vec<T>,
     limit: usize,
-    vec_limit: bool,
     serializer: S,
     deserializer: D,
 }
@@ -32,45 +74,65 @@ impl<T, S, D> VecCache<T, S, D>
         serializer: S,
         deserializer: D,
     ) -> Result<VecCache<T, S, D>, io::Error> {
-        let file = match File::open(path) {
+        let file = match File::create(path) {
             Ok(f) => f,
             Err(e) => return Err(e),
         };
         Ok(VecCache {
             file,
             data: Vec::new(),
-            limit: match limit { Some(l)=>l, None=>usize::MAX },
-            vec_limit: true,
+            limit: match limit {
+                Some(l) => l,
+                None => usize::MAX
+            },
             serializer,
             deserializer,
         })
     }
 
-    pub fn flush(&mut self) -> io::Result<usize> {
-        match self.file.set_len(0) {
-            Ok(_) => {}
-            Err(e) => return Err(e)
-        };
-        match self.file.rewind(){
-            Ok(_)=>{},
-            Err(e)=>{return Err(e)}
-        };
+    pub fn flush(&mut self) -> Result<usize, Error> {
+        self.file.set_len(0)?;
+        self.file.rewind()?;
         let mut iter = self.data.iter();
         let mut i = 0;
         while let Some(d) = iter.next_back() {
-            if i >= self.limit{
+            if i >= self.limit {
                 break;
             }
             i += 1;
-            let data = match (self.serializer)(d) {
-                Ok(d) => d,
-                Err(_) => return Err(io::Error::last_os_error())
-            };
-            match self.file.write_all(&data) {
-                Ok(_) => {}
-                Err(e) => return Err(e)
-            };
+            let data = (self.serializer)(d)?;
+            self.file.write_all(&data)?;
         }
         Ok(self.limit)
+    }
+
+    pub fn push(&mut self, data: T) -> Result<&Self, Error> {
+        let to_write = (self.serializer)(&data)?;
+        self.data.push(data);
+        if self.data.len() < self.limit {
+            return match self.file.write_all(&to_write) {
+                Ok(_) => Ok(self),
+                Err(e) => Err(e.into())
+            };
+        };
+        while self.data.len() > self.limit {
+            self.data.pop();
+        };
+        match self.flush() {
+            Ok(_) => { Ok(self) }
+            Err(e) => { Err(e) }
+        }
+    }
+
+    pub fn push_buf(&mut self, data: T)->&Self{
+        self.data.push(data);
+        while self.data.len() > self.limit{
+            self.data.pop();
+        };
+        self
+    }
+
+    pub fn len(&self)->usize{
+        self.data.len()
     }
 }
