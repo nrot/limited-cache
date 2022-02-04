@@ -1,0 +1,18 @@
+[package]
+name = "limited-cache"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+async-trait = {version="0.1.52"}
+tokio = {version="1.16",  optional = true, features = ["fs", "io-util", "sync"]}
+
+[dev-dependencies]
+serde = {version="1.0"}
+serde_json = "1.0.78"
+
+[features]
+default = ["async"]
+async = ["tokio"]
